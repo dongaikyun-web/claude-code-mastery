@@ -1,0 +1,11 @@
+# Claude Code 개인 설정 (머신별 권한 허용 목록)
+.claude/settings.local.json
+
+# 내보낸 데이터
+yt-trend-*.csv
+yt-trend-backup-*.json
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store

@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>YouTube 트렌드 수집기</title>
+<style>
+  /* ── 검증된 팔레트 토큰 (validate_palette.js: light/dark 전부 PASS) ── */
+  :root{
+    color-scheme:light;
+    --surface:#fcfcfb; --plane:#f9f9f7; --raised:#f1f1ee;
+    --ink:#0b0b0b; --ink2:#52514e; --ink3:#898781;
+    --grid:#e1e0d9; --axis:#c3c2b7; --ring:rgba(11,11,11,.10);
+    --series:#2a78d6;            /* 단일 시리즈 / 순차 인코딩 */
+    --series-wash:rgba(42,120,214,.10);
+    --good:#006300;              /* 델타 상승 (success text) */
+    --st-good:#0ca30c; --st-warn:#fab219; --st-crit:#d03b3b;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      color-scheme:dark;
+      --surface:#1a1a19; --plane:#0d0d0d; --raised:#242422;
+      --ink:#ffffff; --ink2:#c3c2b7; --ink3:#898781;
+      --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,.10);
+      --series:#3987e5; --series-wash:rgba(57,135,229,.12);
+      --good:#0ca30c;
+    }
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--plane); color:var(--ink);
+    font:14px/1.5 system-ui,-apple-system,"Segoe UI","Malgun Gothic",sans-serif;
+  }
+
+  header{position:sticky; top:0; z-index:30; background:var(--surface); border-bottom:1px solid var(--grid); padding:9px 14px}
+  .row{display:flex; gap:7px; align-items:center; flex-wrap:wrap}
+  .row+.row{margin-top:7px; padding-top:7px; border-top:1px solid var(--grid)}
+  h1{font-size:14px; margin:0 10px 0 0; font-weight:650; white-space:nowrap}
+  .leg{font-size:10px; font-weight:700; color:var(--ink3); letter-spacing:.08em; width:26px; flex:none}
+  input,select,button{font:inherit; color:var(--ink); background:var(--surface); border:1px solid var(--axis); border-radius:6px; padding:4px 7px}
+  select{max-width:190px}
+  button{cursor:pointer; background:var(--raised); border-color:transparent}
+  button:hover{border-color:var(--axis)}
+  button.primary{background:var(--series); color:#fff; font-weight:600; border-color:transparent}
+  button:disabled{opacity:.4; cursor:not-allowed}
+  .spacer{flex:1}
+  label.ck{font-size:12px; color:var(--ink2); display:flex; align-items:center; gap:4px; white-space:nowrap}
+
+  /* 쿼터 = 미터 */
+  .meter{display:flex; align-items:center; gap:7px; font-size:12px; color:var(--ink2); white-space:nowrap}
+  .meter .track{width:74px; height:6px; border-radius:3px; overflow:hidden; background:var(--raised)}
+  .meter .fill{height:100%; border-radius:0 3px 3px 0; transition:width .2s}
+  .meter b{color:var(--ink); font-weight:600}
+
+  #status{font-size:12px; color:var(--ink2); padding:7px 14px 0; min-height:19px}
+  #status.err{color:var(--st-crit)} #status.ok{color:var(--good)}
+
+  main{padding:0 14px 60px}
+  .panel{border:1px solid var(--grid); border-radius:8px; margin-top:11px; background:var(--surface); overflow:hidden}
+  .panel>h2{font-size:11px; font-weight:700; margin:0; padding:8px 12px; background:var(--plane); border-bottom:1px solid var(--grid); color:var(--ink3); letter-spacing:.05em; display:flex; align-items:center; gap:8px}
+  .pad{padding:11px}
+  .note{padding:8px 12px; font-size:12px; color:var(--ink2); background:var(--plane); border-bottom:1px solid var(--grid)}
+
+  /* 스탯 타일 */
+  .tiles{display:grid; grid-template-columns:repeat(auto-fill,minmax(132px,1fr)); gap:1px; background:var(--grid)}
+  .tile{background:var(--surface); padding:9px 11px}
+  .tile .lb{font-size:11px; color:var(--ink3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .tile .vl{font-size:19px; font-weight:650; line-height:1.25; margin-top:1px}
+  .tile .dl{font-size:11px; color:var(--ink2)}
+  .tile .dl.up{color:var(--good)}
+
+  table{width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums}
+  th,td{padding:6px 8px; text-align:right; border-bottom:1px solid var(--grid); white-space:nowrap}
+  th{position:sticky; top:0; z-index:5; background:var(--plane); font-size:11px; color:var(--ink3); font-weight:600; cursor:pointer; user-select:none}
+  th[data-sort]:hover{color:var(--ink)}
+  th.sorted{color:var(--ink)} th.sorted::after{content:" \25BC"; font-size:8px}
+  td.l,th.l{text-align:left}
+  tr.vid{cursor:pointer} tr.vid:hover>td{background:var(--plane)}
+  .title{max-width:min(40vw,480px); overflow:hidden; text-overflow:ellipsis; display:block; font-weight:500}
+  .sub{font-size:11px; color:var(--ink2); display:block; overflow:hidden; text-overflow:ellipsis; max-width:min(40vw,480px)}
+  .thumb{width:60px; height:34px; object-fit:cover; border-radius:4px; background:var(--raised); display:block}
+  .mut{color:var(--ink3)}
+  .dl-up{color:var(--good)}
+  .tag{display:inline-block; font-size:10px; padding:0 4px; border-radius:3px; background:var(--raised); color:var(--ink2); margin-left:3px; vertical-align:1px}
+  .rk{font-weight:650} .rkd{font-size:10px; display:block; color:var(--ink3)}
+
+  /* 셀 내 데이터 바 — 4px 높이, 데이터 끝만 라운드 */
+  .cellbar{height:4px; background:var(--series-wash); border-radius:2px; margin-top:3px; overflow:hidden}
+  .cellbar>i{display:block; height:100%; background:var(--series); border-radius:0 2px 2px 0}
+
+  tr.detail>td{background:var(--plane); padding:12px}
+  .dgrid{display:flex; gap:22px; flex-wrap:wrap; align-items:flex-start}
+  .dcol{min-width:158px}
+  .dcol h3{font-size:11px; color:var(--ink3); margin:0 0 4px; font-weight:700; letter-spacing:.04em}
+  .kv{font-size:12px; display:flex; justify-content:space-between; gap:16px; padding:1px 0}
+  .kv b{font-weight:600}
+  a{color:var(--series)}
+
+  /* 스파크라인 + 호버 레이어 */
+  .sparkwrap{position:relative; width:340px}
+  svg.spark{display:block; background:var(--surface); border:1px solid var(--grid); border-radius:6px; cursor:crosshair}
+  .tip{position:absolute; pointer-events:none; z-index:10; background:var(--surface); border:1px solid var(--axis); border-radius:6px; padding:5px 8px; font-size:11px; line-height:1.45; box-shadow:0 2px 8px var(--ring); white-space:nowrap; opacity:0; transition:opacity .1s}
+  .tip b{font-weight:650}
+
+  .kw{display:flex; flex-wrap:wrap; gap:5px}
+  .kwi{background:var(--raised); border-radius:5px; padding:3px 7px; font-size:12px}
+  .kwi i{font-style:normal; color:var(--ink3); font-size:11px; margin-left:5px}
+  .kwi.new{box-shadow:inset 0 0 0 1px var(--series)}
+
+  .empty{padding:34px 12px; text-align:center; color:var(--ink2); font-size:13px; line-height:1.85}
+  code{background:var(--raised); padding:1px 5px; border-radius:4px; font-size:12px}
+  details.help{margin-top:11px; font-size:12px; color:var(--ink2)}
+  details.help summary{cursor:pointer; padding:5px 0; color:var(--ink3)}
+  details.help div{padding:6px 0 0; line-height:1.85}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="row">
+    <h1>YouTube 트렌드 수집기</h1>
+    <input id="key" type="password" placeholder="YouTube Data API v3 키" autocomplete="off" style="min-width:190px">
+    <button id="saveKey">키 저장</button>
+    <span class="spacer"></span>
+    <span class="meter" title="일일 쿼터 사용량 (태평양시 자정 초기화)">
+      <span class="track" id="qtrack"><span class="fill" id="qfill" style="width:0%"></span></span>
+      <span id="qtext">쿼터 <b>0</b> / 10,000</span>
+    </span>
+    <span class="meter" id="lastRun"></span>
+  </div>
+
+  <div class="row">
+    <span class="leg">수집</span>
+    <select id="region" title="수집할 국가"></select>
+    <select id="cat" title="수집할 카테고리"><option value="">전체 카테고리</option></select>
+    <button class="primary" id="collect">수집</button>
+    <button id="collectMulti" title="KR·US·JP 전체 카테고리 연속 수집">KR+US+JP</button>
+    <label class="ck"><input type="checkbox" id="auto"> 1시간마다</label>
+  </div>
+
+  <div class="row">
+    <span class="leg">보기</span>
+    <select id="vRegion" title="수집된 국가로 필터"><option value="">모든 국가</option></select>
+    <select id="vCat" title="영상 카테고리로 필터"><option value="">모든 카테고리</option></select>
+    <select id="vLen">
+      <option value="all">모든 길이</option>
+      <option value="short">숏폼 (≤3분)</option>
+      <option value="long">롱폼 (&gt;3분)</option>
+    </select>
+    <input id="q" type="text" placeholder="제목·채널 검색" style="min-width:130px">
+    <span class="spacer"></span>
+    <button id="batchOut" title="화면에 보이는 채널들의 상대 배수를 한번에 계산">배수 일괄 계산</button>
+    <button id="expCsv">CSV</button>
+    <button id="expJson">백업</button>
+    <button id="impJson">복원</button>
+    <button id="wipe">초기화</button>
+  </div>
+</header>
+
+<div id="status"></div>
+
+<main>
+  <div class="panel">
+    <h2>요약</h2>
+    <div class="tiles" id="tiles"></div>
+  </div>
+
+  <div class="panel">
+    <h2>영상 <span class="spacer"></span><span class="mut" id="cnt" style="font-weight:400"></span></h2>
+    <div id="hint" class="note" hidden></div>
+    <div style="overflow-x:auto">
+      <table id="tbl"><thead><tr id="head"></tr></thead><tbody id="body"></tbody></table>
+    </div>
+    <div class="empty" id="empty">API 키를 저장하고 <b>수집</b>을 누르세요.</div>
+  </div>
+
+  <div class="panel">
+    <h2>키워드 빈도<span class="spacer"></span><span class="mut" style="font-weight:400; font-size:11px">테두리 = 최근 3일 영상에만 등장</span></h2>
+    <div class="pad kw" id="kw"></div>
+  </div>
+
+  <details class="help">
+    <summary>사용법 · 지표 · 주의사항</summary>
+    <div>
+      <b>API 키</b> — Google Cloud Console → 프로젝트 생성 → <code>YouTube Data API v3</code> 사용 설정 → API 키 생성. 무료, 하루 10,000유닛.<br><br>
+      <b>수집 vs 보기</b> — 위쪽 <b>수집</b> 줄은 <u>다음 수집에 어느 차트를 가져올지</u> 정합니다. 아래 <b>보기</b> 줄은 <u>이미 모아둔 데이터를 걸러 보여줍니다</u>. 보기 드롭다운에는 실제로 수집된 국가·카테고리만 나타납니다.<br><br>
+      <b>지표</b><br>
+      · <b>순위</b> — 해당 국가 인기 급상승 차트에서의 위치. 아래 화살표는 지난 수집 대비 변동.<br>
+      · <b>현재 VPH</b> — 최근 두 스냅샷 사이 조회수 증가분 ÷ 경과시간. 지금도 오르는지를 봅니다. 10분 이상 간격의 수집이 2회 필요합니다.<br>
+      · <b>누적 VPH</b> — 조회수 ÷ 업로드 후 경과시간. 1회 수집만으로 계산됩니다.<br>
+      · <b>배수</b> — 조회수 ÷ 같은 채널 최근 영상(7일 이상 지난 것 최대 20개) 조회수 중앙값. 구독자 규모를 보정하므로 작은 채널의 대박을 찾아냅니다. <b>배수 일괄 계산</b>으로 화면의 채널을 한번에 처리할 수 있습니다(채널당 3유닛).<br>
+      · <b>참여율</b> — 좋아요 ÷ 조회수.<br><br>
+      <b>주의</b><br>
+      · 스냅샷은 이 페이지를 열었을 때만 기록됩니다. 하루 한 번 열면 일간 추이가 쌓입니다.<br>
+      · 카테고리별 인기 급상승 차트는 YouTube가 일부 카테고리에만 제공합니다. 결과가 0건인 카테고리는 목록에 <b>차트 없음</b>으로 표시해 두니 다른 카테고리를 고르세요.<br>
+      · 데이터는 localStorage(약 5MB, 스냅샷 6만 건)에 저장됩니다. 브라우저 데이터 삭제 시 사라지니 <b>백업</b>을 주기적으로 쓰세요.<br>
+      · API 키는 localStorage에만 저장되며 파일에는 기록되지 않습니다. 다만 브라우저 직접 호출 구조상 개발자도구로는 보입니다. 웹에 올릴 경우 Cloud Console에서 HTTP 리퍼러 제한을 거세요.<br>
+      · <code>file://</code>에서 네트워크 오류가 나면 폴더에서 <code>python -m http.server</code> 실행 후 <code>localhost:8000/trend.html</code>로 접속하세요.<br>
+      · 쿼터는 태평양시 자정(한국시간 오후 4~5시)에 초기화됩니다.
+    </div>
+  </details>
+</main>
+
+<script>
+"use strict";
+
+/* ═══════════ 저장소 ═══════════ */
+const K = { key:'ytt.key', vids:'ytt.vids', snaps:'ytt.snaps', chans:'ytt.chans',
+            quota:'ytt.quota', cfg:'ytt.cfg', cats:'ytt.cats', nochart:'ytt.nochart' };
+const MAX_SNAPS = 60000;
+const MIN_GAP   = 600;   // 현재 VPH 계산 최소 간격 10분
+const DEDUP     = 300;   // 5분 내 재수집은 같은 점으로 간주
+
+const load = (k,d) => { try{ const s=localStorage.getItem(k); return s?JSON.parse(s):d; }catch(e){ return d; } };
+function save(k,v){
+  try{ localStorage.setItem(k, JSON.stringify(v)); return true; }
+  catch(e){
+    if(k===K.snaps && Array.isArray(v)){                    // 용량 초과 → 오래된 스냅샷 30% 정리 후 재시도
+      v.splice(0, Math.floor(v.length*.3));
+      try{ localStorage.setItem(k, JSON.stringify(v)); return true; }catch(e2){}
+    }
+    setStatus('저장 실패: localStorage 용량 초과. 백업 후 초기화하세요.','err');
+    return false;
+  }
+}
+
+let vids  = load(K.vids, {});    // id -> {t,c,cn,p,g,th,d,tg, s:{ "KR|10":{r,pr,t} }}
+let snaps = load(K.snaps, []);   // [id, tSec, views, likes, comments]
+let chans = load(K.chans, {});   // channelId -> {n,s,m,k,u,pl}
+let cfg   = load(K.cfg, {});
+let catCache = load(K.cats, {}); // region -> [{id,title}]
+let noChart  = load(K.nochart, {}); // "KR|10" -> true (mostPopular 차트 없음)
+cfg = Object.assign({ region:'KR', cat:'', auto:false, sort:'nvph',
+                      vRegion:'', vCat:'', vLen:'all', lastRun:0 }, cfg);
+
+/* ═══════════ 쿼터 (태평양시 자정 리셋) ═══════════ */
+const ptDate = () => new Intl.DateTimeFormat('en-CA',{timeZone:'America/Los_Angeles',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+function quota(){ const q=load(K.quota,{d:'',u:0}); if(q.d!==ptDate()){ q.d=ptDate(); q.u=0; save(K.quota,q); } return q; }
+function spend(n){ const q=quota(); q.u+=n; save(K.quota,q); paintQuota(); }
+function paintQuota(){
+  const u = quota().u, pct = Math.min(100, u/100);
+  // 미터: 채움이 심각도, 트랙은 같은 색의 옅은 단계
+  const c = pct>=90 ? 'var(--st-crit)' : pct>=60 ? 'var(--st-warn)' : 'var(--st-good)';
+  $('qfill').style.width = pct.toFixed(1)+'%';
+  $('qfill').style.background = c;
+  $('qtrack').style.background = `color-mix(in srgb, ${c} 22%, var(--raised))`;
+  $('qtext').innerHTML = `쿼터 <b>${u.toLocaleString()}</b> / 10,000`;
+}
+
+/* ═══════════ 유틸 ═══════════ */
+const $ = id => document.getElementById(id);
+const now = () => Math.floor(Date.now()/1000);
+const esc = s => String(s??'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function fmt(n){
+  if(n==null || !isFinite(n)) return '—';
+  n = Math.round(n);
+  const a = Math.abs(n);
+  if(a>=1e8) return (n/1e8).toFixed(a>=1e9?0:2).replace(/\.?0+$/,'')+'억';
+  if(a>=1e4) return (n/1e4).toFixed(a>=1e6?0:1).replace(/\.0$/,'')+'만';
+  return n.toLocaleString();
+}
+function fmtDur(s){
+  if(s==null) return '—';
+  const h=Math.floor(s/3600), m=Math.floor(s%3600/60), x=s%60;
+  return h ? `${h}:${String(m).padStart(2,'0')}:${String(x).padStart(2,'0')}` : `${m}:${String(x).padStart(2,'0')}`;
+}
+function ago(sec){
+  if(!sec) return '—';
+  const d = now()-sec;
+  if(d<60) return '방금';
+  if(d<3600) return Math.floor(d/60)+'분 전';
+  if(d<86400) return Math.floor(d/3600)+'시간 전';
+  return Math.floor(d/86400)+'일 전';
+}
+function parseDur(iso){
+  const m = /^P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/.exec(iso||'');
+  return m ? (+m[1]||0)*86400+(+m[2]||0)*3600+(+m[3]||0)*60+(+m[4]||0) : null;
+}
+function median(a){
+  if(!a || !a.length) return null;
+  const s=[...a].sort((x,y)=>x-y), h=s.length>>1;
+  return s.length%2 ? s[h] : (s[h-1]+s[h])/2;
+}
+function setStatus(msg, cls){ const el=$('status'); el.textContent=msg||''; el.className=cls||''; }
+
+/* ═══════════ API ═══════════ */
+const API = 'https://www.googleapis.com/youtube/v3/';
+const apiKey = () => load(K.key,'') || '';
+
+async function api(path, params, cost){
+  if(!apiKey()) throw new Error('API 키를 먼저 저장하세요.');
+  const u = new URL(API+path);
+  for(const [a,b] of Object.entries(params)) if(b!=null && b!=='') u.searchParams.set(a,b);
+  u.searchParams.set('key', apiKey());
+
+  let r;
+  try{ r = await fetch(u,{cache:'no-store'}); }
+  catch(e){ throw new Error('네트워크 오류. file:// 로 열었다면 로컬 서버(python -m http.server)로 접속해 보세요.'); }
+  spend(cost);
+
+  if(!r.ok){
+    let reason='', msg='';
+    try{ const j=await r.json(); reason=j.error?.errors?.[0]?.reason||''; msg=j.error?.message||''; }catch(e){}
+    if(reason==='quotaExceeded') throw new Error('일일 쿼터를 모두 사용했습니다. 태평양시 자정에 초기화됩니다.');
+    if(reason==='keyInvalid') throw new Error('API 키가 유효하지 않습니다.');
+    if(r.status===403) throw new Error('접근 거부 — YouTube Data API v3 사용 설정과 키 제한을 확인하세요. '+msg);
+    if(r.status===400) throw new Error('요청 오류: '+(msg||reason));
+    throw new Error(`API ${r.status}: ${msg||reason||'알 수 없는 오류'}`);
+  }
+  return r.json();
+}
+
+/* 인기 급상승 — videos.list(chart=mostPopular), 1유닛/페이지 */
+async function fetchTrending(region, cat, pages=2){
+  const out=[]; let token=null;
+  for(let i=0;i<pages;i++){
+    const j = await api('videos', {
+      part:'snippet,statistics,contentDetails', chart:'mostPopular',
+      regionCode:region, videoCategoryId:cat, maxResults:50, pageToken:token
+    }, 1);
+    out.push(...(j.items||[]));
+    token = j.nextPageToken;
+    if(!token) break;
+  }
+  return out;
+}
+
+/* 카테고리 목록 — 1유닛, 국가별 캐시.
+   assignable 필터는 쓰지 않는다: 그 플래그는 "업로더가 지정 가능한가"이지
+   "mostPopular 차트가 존재하는가"와 무관하다. 차트 유무는 수집해 보고 학습한다. */
+async function loadCats(region, force){
+  if(!catCache[region] && apiKey()){
+    try{
+      const j = await api('videoCategories',{part:'snippet',regionCode:region},1);
+      catCache[region] = (j.items||[]).map(c=>({id:c.id,title:c.snippet?.title||c.id}));
+      save(K.cats,catCache);
+    }catch(e){ if(force) setStatus('카테고리 목록을 불러오지 못했습니다: '+e.message,'err'); }
+  }
+  paintCatSelect(region);
+}
+function paintCatSelect(region){
+  const list = catCache[region]||[], sel=$('cat');
+  sel.innerHTML = '<option value="">전체 카테고리</option>' + list.map(c =>
+    `<option value="${c.id}">${esc(c.title)}${noChart[region+'|'+c.id]?' — 차트 없음':''}</option>`).join('');
+  sel.value = list.some(c=>c.id===cfg.cat) ? cfg.cat : (cfg.cat='');
+}
+function catName(id){
+  for(const r in catCache){ const f=catCache[r].find(c=>c.id===id); if(f) return f.title; }
+  return id ? '카테고리 '+id : '';
+}
+
+/* ═══════════ 수집 ═══════════ */
+function ingest(items, region, cat){
+  const t = now(), sk = region+'|'+(cat||'');
+  let added=0;
+  items.forEach((it,i) => {
+    const id=it.id; if(!id) return;
+    const sn=it.snippet||{}, st=it.statistics||{};
+    const prevV = vids[id];
+    const seen  = Object.assign({}, prevV?.s || {});
+    const was   = seen[sk];
+    // 같은 차트에서 이전에 본 순위를 pr에 보존 (직전 수집이 DEDUP 이내면 갱신하지 않음)
+    seen[sk] = { r:i+1, pr: (was && t-was.t > DEDUP) ? was.r : (was?.pr ?? null), t };
+
+    vids[id] = {
+      t: sn.title||'', c: sn.channelId||'', cn: sn.channelTitle||'',
+      p: sn.publishedAt ? Date.parse(sn.publishedAt)/1000|0 : null,
+      g: sn.categoryId||'', th: sn.thumbnails?.medium?.url||sn.thumbnails?.default?.url||'',
+      d: parseDur(it.contentDetails?.duration), tg:(sn.tags||[]).slice(0,15), s:seen
+    };
+
+    const v = +st.viewCount;
+    if(!isFinite(v)) return;
+    const rec=[id,t,v,+st.likeCount||0,+st.commentCount||0];
+    const dup=findLastIdx(id, s => t-s[1] < DEDUP);
+    if(dup>=0) snaps[dup]=rec; else { snaps.push(rec); added++; }
+  });
+  if(snaps.length>MAX_SNAPS) snaps.splice(0, snaps.length-MAX_SNAPS);
+  save(K.vids,vids); save(K.snaps,snaps);
+  return added;
+}
+function findLastIdx(id,pred){ for(let i=snaps.length-1;i>=0;i--) if(snaps[i][0]===id && pred(snaps[i])) return i; return -1; }
+
+async function collect(jobs){   // jobs: [[region,cat], ...]
+  const bs=[$('collect'),$('collectMulti'),$('batchOut')];
+  bs.forEach(b=>b.disabled=true);
+  try{
+    let added=0, got=0, empties=[];
+    for(const [rg,ct] of jobs){
+      setStatus(`${rg}${ct?' / '+catName(ct):''} 수집 중…`);
+      const items = await fetchTrending(rg,ct,2);
+      if(!items.length){
+        empties.push(rg+(ct?' / '+catName(ct):''));
+        if(ct){ noChart[rg+'|'+ct]=true; save(K.nochart,noChart); }
+        continue;
+      }
+      delete noChart[rg+'|'+(ct||'')]; save(K.nochart,noChart);
+      got += items.length;
+      added += ingest(items,rg,ct);
+    }
+    cfg.lastRun=now(); save(K.cfg,cfg);
+    paintCatSelect(cfg.region);
+    if(!got){
+      setStatus(`결과 0건 — ${empties.join(', ')}에는 인기 급상승 차트가 없습니다. 카테고리를 "전체"로 두거나 다른 카테고리를 선택하세요.`,'err');
+    }else{
+      setStatus(`수집 완료 — 영상 ${got}건 조회, 스냅샷 ${added}건 추가`
+        + (empties.length?` (차트 없음: ${empties.join(', ')})`:''), 'ok');
+    }
+    render();
+  }catch(e){ setStatus(e.message,'err'); }
+  finally{ bs.forEach(b=>b.disabled=false); paintLastRun(); }
+}
+
+/* 채널 상대 배수 — channels.list(1) + playlistItems.list(1) + videos.list(1) */
+async function computeOutlier(cid){
+  const j1 = await api('channels',{part:'snippet,statistics,contentDetails',id:cid},1);
+  const ch = j1.items?.[0];
+  if(!ch) throw new Error('채널 정보를 찾을 수 없습니다.');
+  const pl = ch.contentDetails?.relatedPlaylists?.uploads;
+  if(!pl) throw new Error('업로드 재생목록이 비공개입니다.');
+
+  const j2 = await api('playlistItems',{part:'contentDetails',playlistId:pl,maxResults:50},1);
+  const ids = (j2.items||[]).map(i=>i.contentDetails?.videoId).filter(Boolean);
+  if(!ids.length) throw new Error('업로드 영상이 없습니다.');
+
+  const j3 = await api('videos',{part:'statistics,snippet',id:ids.join(',')},1);
+  const cutoff = now()-7*86400;      // 7일 미만은 아직 성숙하지 않아 기준선에서 제외
+  const views = (j3.items||[])
+    .filter(v => (Date.parse(v.snippet?.publishedAt)/1000|0) < cutoff)
+    .map(v => +v.statistics?.viewCount).filter(isFinite).slice(0,20);
+
+  chans[cid] = { n:ch.snippet?.title||'',
+    s: ch.statistics?.hiddenSubscriberCount ? null : (+ch.statistics?.subscriberCount||null),
+    m: median(views), k:views.length, u:now(), pl };
+  save(K.chans,chans);
+  return chans[cid];
+}
+
+async function batchOutlier(){
+  const rows = visibleRows();
+  const need = [...new Set(rows.map(m=>m.v.c).filter(c=>c && !chans[c]?.m))];
+  if(!need.length) return setStatus('화면의 모든 채널에 이미 기준선이 있습니다.','ok');
+  const cap = Math.min(need.length, 40);
+  if(!confirm(`${cap}개 채널의 상대 배수를 계산합니다.\n예상 쿼터 ${cap*3}유닛 (현재 ${quota().u} 사용)\n계속할까요?`)) return;
+
+  const bs=[$('collect'),$('collectMulti'),$('batchOut')];
+  bs.forEach(b=>b.disabled=true);
+  let ok=0;
+  try{
+    for(let i=0;i<cap;i++){
+      setStatus(`배수 계산 ${i+1}/${cap}…`);
+      try{ await computeOutlier(need[i]); ok++; }
+      catch(e){
+        if(/쿼터/.test(e.message)) throw e;
+        // 개별 채널 실패(비공개 등)는 건너뛴다
+      }
+    }
+    setStatus(`배수 계산 완료 — ${ok}/${cap}개 채널`,'ok');
+  }catch(e){ setStatus(`${ok}개 처리 후 중단: ${e.message}`,'err'); }
+  finally{ bs.forEach(b=>b.disabled=false); render(); }
+}
+
+/* ═══════════ 지표 ═══════════ */
+const histCache = new Map();
+function buildHist(){
+  histCache.clear();
+  for(const s of snaps){
+    let a=histCache.get(s[0]); if(!a) histCache.set(s[0], a=[]);
+    a.push(s);
+  }
+  for(const a of histCache.values()) a.sort((x,y)=>x[1]-y[1]);
+}
+const history = id => histCache.get(id) || [];
+
+function metrics(id){
+  const v=vids[id], h=history(id);
+  if(!v || !h.length) return null;
+  const last=h[h.length-1], views=last[2];
+
+  const ageH = v.p ? Math.max(.5,(last[1]-v.p)/3600) : null;
+  const cvph = ageH ? views/ageH : null;
+
+  let prev=null;
+  for(let i=h.length-2;i>=0;i--) if(last[1]-h[i][1] >= MIN_GAP){ prev=h[i]; break; }
+  const gapH = prev ? (last[1]-prev[1])/3600 : null;
+  const dV   = prev ? views-prev[2] : null;
+
+  const ch = chans[v.c];
+  return { id, v, views, likes:last[3], comments:last[4], ageH, cvph, gapH, dV,
+           nvph: gapH ? dV/gapH : null,
+           eng : views ? last[3]/views : null,
+           mult: (ch && ch.m) ? views/ch.m : null,
+           points:h.length, lastAt:last[1] };
+}
+
+/* 보기 필터에 맞는 s 키들 */
+function keysFor(v, region){
+  const ks = Object.keys(v.s||{});
+  return region ? ks.filter(k => k.slice(0,k.indexOf('|'))===region) : ks;
+}
+function rankOf(v, region){
+  const ks=keysFor(v,region); if(!ks.length) return null;
+  let best=null;
+  for(const k of ks){ const e=v.s[k]; if(e && (best===null || e.r<best.r)) best=e; }
+  return best;
+}
+
+/* ═══════════ 렌더 ═══════════ */
+const COLS = [
+  {k:'rank', label:'순위'},
+  {k:'_th',  label:'',            l:true, fixed:true},
+  {k:'_ti',  label:'제목 / 채널',  l:true, fixed:true},
+  {k:'nvph', label:'현재 VPH'},
+  {k:'cvph', label:'누적 VPH'},
+  {k:'dV',   label:'증가'},
+  {k:'views',label:'조회수'},
+  {k:'mult', label:'배수'},
+  {k:'eng',  label:'참여율'},
+  {k:'age',  label:'업로드'},
+  {k:'dur',  label:'길이'},
+];
+let expanded=null;
+
+function visibleRows(){
+  const q=$('q').value.trim().toLowerCase();
+  return Object.keys(vids).map(metrics).filter(m => {
+    if(!m) return false;
+    if(cfg.vRegion && !keysFor(m.v,cfg.vRegion).length) return false;
+    if(cfg.vCat && m.v.g!==cfg.vCat) return false;
+    if(cfg.vLen==='short' && !(m.v.d!=null && m.v.d<=180)) return false;
+    if(cfg.vLen==='long'  && !(m.v.d!=null && m.v.d>180))  return false;
+    if(q && !(m.v.t.toLowerCase().includes(q) || m.v.cn.toLowerCase().includes(q))) return false;
+    return true;
+  });
+}
+
+function paintViewSelects(){
+  // 보기 드롭다운은 "실제로 수집된" 국가·카테고리만 노출 → 항상 결과가 있다
+  const rgs=new Map(), cts=new Map();
+  for(const id in vids){
+    const v=vids[id];
+    for(const k of Object.keys(v.s||{})){
+      const r=k.slice(0,k.indexOf('|'));
+      rgs.set(r,(rgs.get(r)||0)+1);
+    }
+    if(v.g) cts.set(v.g,(cts.get(v.g)||0)+1);
+  }
+  const fill=(sel,all,map,label,saved)=>{
+    const cur = sel.value || saved || '';   // 새로고침 직후엔 select가 비어 있으므로 cfg 값을 사용
+    sel.innerHTML=`<option value="">${all}</option>`+[...map.entries()].sort((a,b)=>b[1]-a[1])
+      .map(([k,n])=>`<option value="${esc(k)}">${esc(label(k))} (${n})</option>`).join('');
+    sel.value = map.has(cur) ? cur : '';
+    return sel.value;
+  };
+  cfg.vRegion = fill($('vRegion'),'모든 국가',rgs, k=>regionName(k), cfg.vRegion);
+  cfg.vCat    = fill($('vCat'),'모든 카테고리',cts, k=>catName(k), cfg.vCat);
+}
+
+function render(){
+  buildHist(); paintQuota(); paintLastRun();
+  paintViewSelects();
+  $('vLen').value = cfg.vLen;
+
+  const rows = visibleRows();
+  const key = cfg.sort;
+  const val = m => key==='age'  ? (m.v.p||0)
+                 : key==='dur'  ? (m.v.d??-1)
+                 : key==='rank' ? -(rankOf(m.v,cfg.vRegion)?.r ?? 9999)
+                 : (m[key] ?? -Infinity);
+  rows.sort((a,b)=>val(b)-val(a));
+
+  const rounds = new Set(snaps.map(s=>Math.round(s[1]/DEDUP))).size;
+  $('cnt').textContent = `${rows.length}개 · 스냅샷 ${snaps.length.toLocaleString()}건 · 수집 ${rounds}회`;
+  $('empty').style.display = rows.length ? 'none' : '';
+  $('tbl').style.display   = rows.length ? '' : 'none';
+
+  // 증가 지표가 아직 불가능한 상태를 명시적으로 안내
+  const withN = rows.filter(m=>m.nvph!=null).length;
+  const hint=$('hint');
+  if(rows.length && !withN){
+    hint.hidden=false;
+    hint.innerHTML = `수집이 1회뿐이라 <b>현재 VPH·증가</b>는 아직 계산할 수 없습니다. 10분 이상 지난 뒤 한 번 더 수집하면 채워집니다. 그 전까지는 <b>누적 VPH</b>로 정렬해 보세요.`;
+  } else hint.hidden=true;
+
+  $('head').innerHTML = COLS.map(c =>
+    `<th class="${c.l?'l':''}${cfg.sort===c.k?' sorted':''}"${c.fixed?'':` data-sort="${c.k}"`}>${c.label}</th>`).join('');
+
+  const maxN = Math.max(...rows.map(m=>m.nvph||0), 0);
+  const maxC = Math.max(...rows.map(m=>m.cvph||0), 0);
+
+  const out=[];
+  for(const m of rows){
+    const rk = rankOf(m.v, cfg.vRegion);
+    const dr = (rk && rk.pr!=null) ? rk.pr-rk.r : null;
+    const badges = keysFor(m.v,'').map(k=>k.slice(0,k.indexOf('|')))
+      .filter((r,i,a)=>a.indexOf(r)===i).map(r=>`<span class="tag">${esc(r)}</span>`).join('');
+    out.push(`<tr class="vid" data-id="${esc(m.id)}">
+      <td><span class="rk">${rk?rk.r:'—'}</span>${
+        dr===null ? (rk?'<span class="rkd">NEW</span>':'')
+        : dr>0 ? `<span class="rkd dl-up">▲${dr}</span>`
+        : dr<0 ? `<span class="rkd">▼${-dr}</span>` : '<span class="rkd">–</span>'}</td>
+      <td class="l">${m.v.th?`<img class="thumb" loading="lazy" src="${esc(m.v.th)}" alt="">`:''}</td>
+      <td class="l">
+        <span class="title">${esc(m.v.t)}</span>
+        <span class="sub">${esc(m.v.cn)}${badges}${m.v.g?`<span class="tag">${esc(catName(m.v.g))}</span>`:''}${(m.v.d!=null&&m.v.d<=180)?'<span class="tag">숏폼</span>':''}</span>
+      </td>
+      <td>${m.nvph==null?'<span class="mut">—</span>':fmt(m.nvph)+bar(m.nvph,maxN)}</td>
+      <td>${fmt(m.cvph)}${m.cvph?bar(m.cvph,maxC):''}</td>
+      <td class="${m.dV>0?'dl-up':''}">${m.dV==null?'<span class="mut">—</span>':(m.dV>0?'▲ ':'')+fmt(m.dV)}</td>
+      <td>${fmt(m.views)}</td>
+      <td>${m.mult==null?'<span class="mut">?</span>':`<b>${m.mult.toFixed(1)}×</b>`}</td>
+      <td>${m.eng==null?'—':(m.eng*100).toFixed(1)+'%'}</td>
+      <td class="mut">${m.ageH==null?'—':m.ageH<48?Math.round(m.ageH)+'시간':Math.round(m.ageH/24)+'일'}</td>
+      <td class="mut">${fmtDur(m.v.d)}</td>
+    </tr>`);
+    if(expanded===m.id) out.push(detailRow(m));
+  }
+  $('body').innerHTML = out.join('');
+  renderTiles(rows);
+  renderKeywords(rows);
+  wireSpark();
+}
+
+const bar = (v,max) => max>0 ? `<div class="cellbar"><i style="width:${Math.max(2,v/max*100).toFixed(1)}%"></i></div>` : '';
+
+/* 스탯 타일 — 1회 수집만으로도 전부 채워지는 값들 */
+function renderTiles(rows){
+  const views = rows.map(r=>r.views);
+  const chs   = new Set(rows.map(r=>r.v.c).filter(Boolean));
+  const withM = [...chs].filter(c=>chans[c]?.m).length;
+  const shorts= rows.filter(r=>r.v.d!=null && r.v.d<=180).length;
+  const nv    = rows.map(r=>r.nvph).filter(x=>x!=null);
+  const total = views.reduce((a,b)=>a+b,0);
+
+  // 수집 회차별 총 조회수 (최근 12회) → 타일 스파크라인
+  const buckets=new Map(), ids=new Set(rows.map(r=>r.id));
+  for(const s of snaps) if(ids.has(s[0])){
+    const b=Math.round(s[1]/1800);
+    buckets.set(b,(buckets.get(b)||0)+s[2]);
+  }
+  const trend=[...buckets.entries()].sort((a,b)=>a[0]-b[0]).slice(-12).map(e=>e[1]);
+
+  const tile=(lb,vl,dl)=>`<div class="tile"><div class="lb">${lb}</div><div class="vl">${vl}</div>${dl?`<div class="dl">${dl}</div>`:''}</div>`;
+  $('tiles').innerHTML = [
+    tile('영상', rows.length.toLocaleString(), `채널 ${chs.size.toLocaleString()}개`),
+    tile('조회수 합계', fmt(total), trend.length>1 ? tileSpark(trend) : '수집 1회'),
+    tile('조회수 중앙값', fmt(median(views))),
+    tile('누적 VPH 중앙값', fmt(median(rows.map(r=>r.cvph).filter(x=>x!=null)))),
+    tile('현재 VPH 중앙값', nv.length?fmt(median(nv)):'—', nv.length?`${nv.length}개 산출됨`:'수집 2회 필요'),
+    tile('참여율 중앙값', (()=>{const e=median(rows.map(r=>r.eng).filter(x=>x!=null)); return e==null?'—':(e*100).toFixed(1)+'%';})()),
+    tile('숏폼 비율', rows.length?Math.round(shorts/rows.length*100)+'%':'—', `${shorts} / ${rows.length}편`),
+    tile('배수 산출 채널', `${withM} / ${chs.size}`, withM<chs.size?'일괄 계산 가능':'완료'),
+  ].join('');
+}
+function tileSpark(vals){
+  const W=104,H=18,mn=Math.min(...vals),mx=Math.max(...vals);
+  const pts=vals.map((v,i)=>`${(i/(vals.length-1)*(W-2)+1).toFixed(1)},${(H-2-(mx===mn?0:(v-mn)/(mx-mn))*(H-4)).toFixed(1)}`).join(' ');
+  return `<svg width="${W}" height="${H}" aria-hidden="true" style="display:block;margin-top:2px">
+    <polyline points="${pts}" fill="none" stroke="var(--series)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+
+function detailRow(m){
+  const ch=chans[m.v.c];
+  return `<tr class="detail"><td colspan="${COLS.length}"><div class="dgrid">
+    <div>${spark(history(m.id))}</div>
+    <div class="dcol"><h3>스냅샷</h3>
+      <div class="kv"><span>기록 수</span><b>${m.points}</b></div>
+      <div class="kv"><span>최근 수집</span><b>${ago(m.lastAt)}</b></div>
+      <div class="kv"><span>비교 구간</span><b>${m.gapH?m.gapH.toFixed(1)+'시간':'—'}</b></div>
+      <div class="kv"><span>좋아요</span><b>${fmt(m.likes)}</b></div>
+      <div class="kv"><span>댓글</span><b>${fmt(m.comments)}</b></div>
+    </div>
+    <div class="dcol"><h3>차트 순위</h3>
+      ${Object.entries(m.v.s||{}).sort((a,b)=>b[1].t-a[1].t).map(([k,e])=>{
+        const [r,c]=k.split('|');
+        return `<div class="kv"><span>${esc(regionName(r))}${c?' / '+esc(catName(c)):''}</span><b>${e.r}위${e.pr!=null?` <span class="mut">(전 ${e.pr})</span>`:''}</b></div>`;
+      }).join('') || '<div class="mut" style="font-size:12px">기록 없음</div>'}
+    </div>
+    <div class="dcol"><h3>채널 기준선</h3>
+      ${ch ? `<div class="kv"><span>구독자</span><b>${ch.s==null?'비공개':fmt(ch.s)}</b></div>
+        <div class="kv"><span>최근 영상 중앙값</span><b>${fmt(ch.m)}</b></div>
+        <div class="kv"><span>표본</span><b>${ch.k}개</b></div>
+        <div class="kv"><span>갱신</span><b>${ago(ch.u)}</b></div>
+        <div style="margin-top:6px"><button data-out="${esc(m.v.c)}">다시 계산 (3유닛)</button></div>`
+      : `<div class="mut" style="font-size:12px;margin-bottom:6px">아직 계산되지 않았습니다.</div>
+        <button data-out="${esc(m.v.c)}">배수 계산 (3유닛)</button>`}
+    </div>
+    <div class="dcol"><h3>링크</h3>
+      <div><a href="https://www.youtube.com/watch?v=${encodeURIComponent(m.id)}" target="_blank" rel="noopener">영상 열기 ↗</a></div>
+      <div><a href="https://www.youtube.com/channel/${encodeURIComponent(m.v.c)}" target="_blank" rel="noopener">채널 열기 ↗</a></div>
+      ${m.v.tg?.length?`<h3 style="margin-top:8px">태그</h3><div class="mut" style="font-size:11px;max-width:210px">${esc(m.v.tg.join(', '))}</div>`:''}
+    </div>
+  </div></td></tr>`;
+}
+
+/* 조회수 시계열 — 2px 라인, 10% 면적 워시, 끝점 마커 r=4 + 2px 서피스 링, 크로스헤어 툴팁 */
+const SP={W:340,H:120,L:8,R:10,T:14,B:20};
+function spark(h){
+  if(h.length<2) return `<div class="sparkwrap"><svg class="spark" width="${SP.W}" height="${SP.H}">
+    <text x="${SP.W/2}" y="${SP.H/2+4}" fill="var(--ink3)" font-size="12" text-anchor="middle">스냅샷 2건 이상 필요</text></svg></div>`;
+  const xs=h.map(s=>s[1]), ys=h.map(s=>s[2]);
+  const x0=Math.min(...xs), x1=Math.max(...xs), y0=Math.min(...ys), y1=Math.max(...ys);
+  const px=v=>SP.L+(x1===x0?0:(v-x0)/(x1-x0))*(SP.W-SP.L-SP.R);
+  const py=v=>SP.H-SP.B-(y1===y0?0:(v-y0)/(y1-y0))*(SP.H-SP.T-SP.B);
+  const pts=h.map(s=>`${px(s[1]).toFixed(1)},${py(s[2]).toFixed(1)}`).join(' ');
+  const base=SP.H-SP.B;
+  const end=h[h.length-1];
+  return `<div class="sparkwrap">
+    <svg class="spark" width="${SP.W}" height="${SP.H}" data-pts="${esc(JSON.stringify(h.map(s=>[px(s[1]),py(s[2]),s[1],s[2]])))}">
+      <line x1="${SP.L}" y1="${base}" x2="${SP.W-SP.R}" y2="${base}" stroke="var(--axis)" stroke-width="1"/>
+      <polygon points="${px(x0)},${base} ${pts} ${px(x1)},${base}" fill="var(--series)" opacity=".10"/>
+      <polyline points="${pts}" fill="none" stroke="var(--series)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+      <line class="cross" x1="0" y1="${SP.T-6}" x2="0" y2="${base}" stroke="var(--axis)" stroke-width="1" style="display:none"/>
+      <circle class="hov" r="4" fill="var(--series)" stroke="var(--surface)" stroke-width="2" style="display:none"/>
+      <circle cx="${px(end[1]).toFixed(1)}" cy="${py(end[2]).toFixed(1)}" r="4" fill="var(--series)" stroke="var(--surface)" stroke-width="2"/>
+      <text x="${SP.L}" y="10" font-size="10" fill="var(--ink3)">${fmt(y1)}</text>
+      <text x="${SP.L}" y="${SP.H-6}" font-size="10" fill="var(--ink3)">${ago(x0)} → 지금 · ${fmt(y1-y0)} 증가</text>
+    </svg>
+    <div class="tip"></div>
+  </div>`;
+}
+function wireSpark(){
+  document.querySelectorAll('svg.spark[data-pts]').forEach(svg => {
+    const pts=JSON.parse(svg.dataset.pts), tip=svg.parentNode.querySelector('.tip');
+    const cross=svg.querySelector('.cross'), hov=svg.querySelector('.hov');
+    svg.onmousemove = e => {
+      const r=svg.getBoundingClientRect(), mx=(e.clientX-r.left)*(SP.W/r.width);
+      let best=pts[0];
+      for(const p of pts) if(Math.abs(p[0]-mx)<Math.abs(best[0]-mx)) best=p;
+      cross.style.display=''; cross.setAttribute('x1',best[0]); cross.setAttribute('x2',best[0]);
+      hov.style.display='';   hov.setAttribute('cx',best[0]);   hov.setAttribute('cy',best[1]);
+      tip.innerHTML = `<b>${(+best[3]).toLocaleString()}회</b><br>${new Date(best[2]*1000).toLocaleString('ko-KR',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}`;
+      tip.style.opacity=1;
+      const sc=r.width/SP.W;
+      tip.style.left=Math.min(r.width-tip.offsetWidth-4, Math.max(0,best[0]*sc-tip.offsetWidth/2))+'px';
+      tip.style.top=Math.max(0,best[1]*sc-tip.offsetHeight-8)+'px';
+    };
+    svg.onmouseleave = () => { tip.style.opacity=0; cross.style.display='none'; hov.style.display='none'; };
+  });
+}
+
+/* ═══════════ 키워드 ═══════════ */
+const STOP=new Set(['그리고','하지만','그래서','너무','정말','진짜','다시','이제','오늘','완전','최고','영상','구독','좋아요','댓글','채널','공식','풀버전','clip','shorts','official','video','mv','feat','ep','vs','the','and','for','with','you','your','this','that','are','was','ft']);
+const PARTICLES=/(으로써|으로서|이라고|라고|에게서|께서|에서|으로|이나|보다|처럼|까지|부터|한테|에게|와의|과의|의|가|을|를|은|는|이|도|만|로|와|과|에|랑|나|야|아)$/;
+function tokenize(s){
+  return String(s||'').replace(/[^가-힣ㄱ-ㅎa-zA-Z0-9 ]/g,' ').split(/\s+/).map(w=>{
+    w=w.trim();
+    if(/^[a-zA-Z]+$/.test(w)) w=w.toLowerCase();
+    if(/[가-힣]/.test(w)&&w.length>2) w=w.replace(PARTICLES,'');
+    return w;
+  }).filter(w=>w.length>=2 && !STOP.has(w) && !/^\d+$/.test(w));
+}
+function renderKeywords(rows){
+  const cut=now()-3*86400, map=new Map();
+  for(const m of rows){
+    for(const w of new Set(tokenize(m.v.t+' '+(m.v.tg||[]).join(' ')))){
+      let e=map.get(w); if(!e) map.set(w, e={n:0,views:0,recent:0});
+      e.n++; e.views+=m.views; if(m.v.p&&m.v.p>=cut) e.recent++;
+    }
+  }
+  const top=[...map.entries()].filter(([,e])=>e.n>=2)
+    .sort((a,b)=>b[1].n-a[1].n||b[1].views-a[1].views).slice(0,40);
+  $('kw').innerHTML = top.length
+    ? top.map(([w,e])=>`<span class="kwi ${e.recent===e.n?'new':''}">${esc(w)}<i>${e.n}편 · ${fmt(e.views)}</i></span>`).join('')
+    : '<span class="mut">2편 이상에 공통 등장하는 단어가 없습니다.</span>';
+}
+
+/* ═══════════ 내보내기 ═══════════ */
+function download(name,text,mime,bom){
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([(bom?'﻿':'')+text],{type:mime}));
+  a.download=name; a.click(); URL.revokeObjectURL(a.href);
+}
+function exportCsv(){
+  const H=['rank','videoId','title','channel','channelId','regions','categoryId','category','publishedAt','durationSec','views','likes','comments','currentVPH','cumulativeVPH','deltaViews','engagement','multiplier','snapshots'];
+  const cell=v=>v==null?'':/[",\n]/.test(String(v))?`"${String(v).replace(/"/g,'""')}"`:String(v);
+  const lines=[H.join(',')];
+  for(const m of visibleRows()){
+    const rk=rankOf(m.v,cfg.vRegion);
+    lines.push([rk?rk.r:'',m.id,m.v.t,m.v.cn,m.v.c,
+      keysFor(m.v,'').map(k=>k.slice(0,k.indexOf('|'))).filter((r,i,a)=>a.indexOf(r)===i).join(' '),
+      m.v.g,catName(m.v.g),m.v.p?new Date(m.v.p*1000).toISOString():'',m.v.d,
+      m.views,m.likes,m.comments,m.nvph?.toFixed(1),m.cvph?.toFixed(1),m.dV,
+      m.eng?.toFixed(5),m.mult?.toFixed(2),m.points].map(cell).join(','));
+  }
+  download(`yt-trend-${new Date().toISOString().slice(0,10)}.csv`, lines.join('\n'), 'text/csv;charset=utf-8', true);
+}
+
+/* ═══════════ 국가 ═══════════ */
+const REGIONS=[['KR','한국'],['US','미국'],['JP','일본'],['GB','영국'],['DE','독일'],['FR','프랑스'],
+ ['CA','캐나다'],['AU','호주'],['IN','인도'],['BR','브라질'],['MX','멕시코'],['ID','인도네시아'],
+ ['VN','베트남'],['TH','태국'],['TW','대만'],['HK','홍콩'],['SG','싱가포르'],['PH','필리핀'],
+ ['ES','스페인'],['IT','이탈리아'],['NL','네덜란드'],['SE','스웨덴'],['PL','폴란드'],['TR','튀르키예'],
+ ['RU','러시아'],['SA','사우디'],['AE','UAE'],['EG','이집트'],['ZA','남아공'],['NG','나이지리아'],
+ ['AR','아르헨티나'],['CL','칠레']];
+const RMAP=new Map(REGIONS);
+const regionName = c => RMAP.has(c) ? `${RMAP.get(c)} (${c})` : c;
+function paintLastRun(){ $('lastRun').innerHTML = cfg.lastRun ? `마지막 수집 <b>${ago(cfg.lastRun)}</b>` : '수집 기록 없음'; }
+
+/* ═══════════ 초기화 ═══════════ */
+function init(){
+  $('region').innerHTML = REGIONS.map(([c,n])=>`<option value="${c}">${n} (${c})</option>`).join('');
+  $('region').value=cfg.region;
+  $('auto').checked=!!cfg.auto;
+  if(apiKey()) $('key').value='••••••••••••';
+  loadCats(cfg.region);
+  render();
+
+  $('saveKey').onclick=()=>{
+    const v=$('key').value.trim();
+    if(!v||v.startsWith('•')) return setStatus('키를 입력하세요.','err');
+    save(K.key,v); $('key').value='••••••••••••';
+    setStatus('키를 저장했습니다.','ok');
+    loadCats(cfg.region,true);
+  };
+  $('key').onkeydown=e=>{ if(e.key==='Enter') $('saveKey').click(); };
+
+  $('region').onchange=e=>{ cfg.region=e.target.value; cfg.cat=''; save(K.cfg,cfg); loadCats(cfg.region,true); };
+  $('cat').onchange   =e=>{ cfg.cat=e.target.value; save(K.cfg,cfg);
+    if(noChart[cfg.region+'|'+cfg.cat]) setStatus('이 카테고리에는 인기 급상승 차트가 없습니다(이전 수집에서 0건). 다른 카테고리를 권합니다.','err');
+    else setStatus(''); };
+
+  // 보기 컨트롤 — 즉시 재렌더 (이전 버전의 핵심 결함)
+  $('vRegion').onchange=e=>{ cfg.vRegion=e.target.value; save(K.cfg,cfg); render(); };
+  $('vCat').onchange   =e=>{ cfg.vCat=e.target.value;    save(K.cfg,cfg); render(); };
+  $('vLen').onchange   =e=>{ cfg.vLen=e.target.value;    save(K.cfg,cfg); render(); };
+  $('q').oninput=()=>render();
+
+  $('collect').onclick     =()=>collect([[cfg.region,cfg.cat]]);
+  $('collectMulti').onclick=()=>collect([['KR',''],['US',''],['JP','']]);
+  $('batchOut').onclick    =batchOutlier;
+
+  let timer=null;
+  const setAuto=on=>{ clearInterval(timer); timer=null; if(on) timer=setInterval(()=>collect([[cfg.region,cfg.cat]]),3600_000); };
+  $('auto').onchange=e=>{ cfg.auto=e.target.checked; save(K.cfg,cfg); setAuto(cfg.auto); };
+  setAuto(cfg.auto);
+
+  $('head').addEventListener('click',e=>{
+    const k=e.target.closest('th')?.dataset.sort;
+    if(k){ cfg.sort=k; save(K.cfg,cfg); render(); }
+  });
+
+  $('body').addEventListener('click',async e=>{
+    const ob=e.target.closest('button[data-out]');
+    if(ob){
+      e.stopPropagation(); ob.disabled=true; ob.textContent='계산 중…';
+      try{ await computeOutlier(ob.dataset.out); setStatus('채널 기준선을 갱신했습니다.','ok'); render(); }
+      catch(err){ setStatus(err.message,'err'); ob.disabled=false; ob.textContent='배수 계산 (3유닛)'; }
+      return;
+    }
+    if(e.target.closest('a')) return;
+    const tr=e.target.closest('tr.vid');
+    if(tr){ expanded = expanded===tr.dataset.id ? null : tr.dataset.id; render(); }
+  });
+
+  $('expCsv').onclick=exportCsv;
+  $('expJson').onclick=()=>download(`yt-trend-backup-${new Date().toISOString().slice(0,10)}.json`,
+    JSON.stringify({v:2,vids,snaps,chans,cats:catCache,cfg}),'application/json',false);
+
+  $('impJson').onclick=()=>{
+    const inp=document.createElement('input'); inp.type='file'; inp.accept='.json,application/json';
+    inp.onchange=async()=>{
+      try{
+        const raw=(await inp.files[0].text()).replace(/^﻿/,'');   // BOM 제거 (v1 백업 호환)
+        const d=JSON.parse(raw);
+        if(!d.vids||!d.snaps) throw new Error('형식이 올바르지 않습니다.');
+        for(const [id,v] of Object.entries(d.vids)){
+          const cur=vids[id];
+          vids[id]=Object.assign({}, cur, v, {s:Object.assign({}, cur?.s||{}, v.s||{})});
+        }
+        Object.assign(chans, d.chans||{});
+        Object.assign(catCache, d.cats||{});
+        const seen=new Set(snaps.map(s=>s[0]+'|'+s[1]));
+        for(const s of d.snaps) if(!seen.has(s[0]+'|'+s[1])){ snaps.push(s); seen.add(s[0]+'|'+s[1]); }
+        snaps.sort((a,b)=>a[1]-b[1]);
+        save(K.vids,vids); save(K.snaps,snaps); save(K.chans,chans); save(K.cats,catCache);
+        setStatus(`복원 완료 — 영상 ${Object.keys(vids).length}개, 스냅샷 ${snaps.length}건`,'ok');
+        render();
+      }catch(err){ setStatus('복원 실패: '+err.message,'err'); }
+    };
+    inp.click();
+  };
+
+  $('wipe').onclick=()=>{
+    if(!confirm('영상·스냅샷·채널 데이터를 모두 삭제합니다. API 키는 유지됩니다.\n계속할까요?')) return;
+    vids={}; snaps=[]; chans={}; expanded=null;
+    save(K.vids,vids); save(K.snaps,snaps); save(K.chans,chans);
+    setStatus('데이터를 삭제했습니다.','ok'); render();
+  };
+}
+init();
+</script>
+</body>
+</html>
